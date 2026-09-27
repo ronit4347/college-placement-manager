@@ -13,11 +13,10 @@ services:
     region: singapore
     plan: free
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    preDeployCommand: alembic upgrade head
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
-    
+
     envVars:
       - key: DATABASE_URL
         fromDatabase:
