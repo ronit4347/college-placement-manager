@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 import httpx
+from pydantic import ValidationError
 from pypdf import PdfReader
 
 from app.core.config import settings
@@ -155,11 +156,56 @@ class OpenAIResumeAnalyzer:
                 raise ValueError("Provider refused or omitted structured content.")
             structured = json.loads(message["content"])
             return ResumeAnalysisResponse.model_validate({**structured, "analysis_mode": "AI"})
-        except (ValueError, TypeError, KeyError, IndexError) as exc:
+        except (ValueError, TypeError, KeyError, IndexError, ValidationError) as exc:
+            raise MalformedAIResponse("AI analysis returned an invalid response. Please try again later.") from exc
+
+
+class GeminiResumeAnalyzer:
+    """Gemini's OpenAI-compatible chat completions API, called from the backend."""
+
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    def __init__(self, api_key: str, model: str, timeout: float):
+        self.api_key, self.model, self.timeout = api_key, model, timeout
+
+    async def analyze(self, resume_text: str, job_title: str, description: str, required_skills: list[str]) -> ResumeAnalysisResponse:
+        if not self.api_key.strip():
+            raise AIProviderError("AI analysis is temporarily unavailable. Please try again later.")
+        user_payload = {
+            "resume_text": resume_text,
+            "job": {"title": job_title, "description": description, "required_skills": required_skills},
+        }
+        try:
+            async with httpx.AsyncClient(base_url=self.BASE_URL, timeout=self.timeout) as client:
+                response = await client.post(
+                    "chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+                        ],
+                        "response_format": {"type": "json_schema", "json_schema": {"name": "resume_analysis", "strict": True, "schema": OUTPUT_SCHEMA}},
+                    },
+                )
+                response.raise_for_status()
+        except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise AIProviderError("AI analysis is temporarily unavailable. Please try again later.") from exc
+        try:
+            payload = response.json()
+            choice = payload["choices"][0]
+            message = choice["message"]
+            if message.get("refusal") or not isinstance(message.get("content"), str):
+                raise ValueError("Provider refused or omitted structured content.")
+            structured = json.loads(message["content"])
+            return ResumeAnalysisResponse.model_validate({**structured, "analysis_mode": "AI"})
+        except (ValueError, TypeError, KeyError, IndexError, ValidationError) as exc:
             raise MalformedAIResponse("AI analysis returned an invalid response. Please try again later.") from exc
 
 
 def get_resume_analyzer() -> ResumeAnalyzer:
-    if settings.ai_api_key and settings.ai_api_key.strip():
-        return OpenAIResumeAnalyzer(settings.ai_api_key.strip(), settings.ai_model, settings.ai_request_timeout_seconds)
+    if settings.ai_provider.strip().lower() == "gemini" and settings.ai_api_key and settings.ai_api_key.strip():
+        return GeminiResumeAnalyzer(settings.ai_api_key.strip(), settings.ai_model, settings.ai_request_timeout_seconds)
     return MockResumeAnalyzer()

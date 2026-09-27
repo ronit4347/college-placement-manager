@@ -9,8 +9,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str | None = None
     jwt_access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
     frontend_url: str = "http://localhost:5173"
+    ai_provider: str = "mock"
     ai_api_key: str | None = None
-    ai_model: str = "gpt-4o-mini"
+    ai_model: str = "gemini-3.8-flash"
     ai_request_timeout_seconds: int = Field(default=25, ge=5, le=120)
     ai_max_resume_characters: int = Field(default=30000, ge=1000, le=100000)
     resume_upload_dir: Path = Path("backend/uploads/resumes")

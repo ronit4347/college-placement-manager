@@ -97,6 +97,109 @@ def test_provider_failure_is_controlled(monkeypatch):
         asyncio.run(resume_analyzer.OpenAIResumeAnalyzer("test", "model", 2).analyze("resume", "role", "description", []))
 
 
+def test_analyzer_factory_defaults_to_mock_and_requires_explicit_gemini(monkeypatch):
+    from app.core.config import Settings
+    assert Settings(_env_file=None).ai_provider == "mock"
+    monkeypatch.setattr(settings, "ai_provider", "mock")
+    monkeypatch.setattr(settings, "ai_api_key", None)
+    assert isinstance(resume_analyzer.get_resume_analyzer(), resume_analyzer.MockResumeAnalyzer)
+    monkeypatch.setattr(settings, "ai_api_key", "configured-key")
+    assert isinstance(resume_analyzer.get_resume_analyzer(), resume_analyzer.MockResumeAnalyzer)
+
+    monkeypatch.setattr(settings, "ai_provider", "gemini")
+    monkeypatch.setattr(settings, "ai_api_key", None)
+    assert isinstance(resume_analyzer.get_resume_analyzer(), resume_analyzer.MockResumeAnalyzer)
+    monkeypatch.setattr(settings, "ai_api_key", "gemini-secret")
+    assert isinstance(resume_analyzer.get_resume_analyzer(), resume_analyzer.GeminiResumeAnalyzer)
+
+
+def test_gemini_request_uses_google_endpoint_and_backend_authorization(monkeypatch):
+    import asyncio
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": '{"overall_match_percentage": 50,"matching_skills":[],"missing_skills":[],"education_match":{"status":"NOT_FOUND","explanation":"Not found"},"experience_match":{"status":"NOT_FOUND","explanation":"Not found"},"improvement_suggestions":["Add examples"]}'}}]}
+
+    class FakeClient:
+        def __init__(self, **kwargs): captured["client"] = kwargs
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, path, **kwargs):
+            captured.update(path=path, request=kwargs)
+            return FakeResponse()
+
+    monkeypatch.setattr(resume_analyzer.httpx, "AsyncClient", FakeClient)
+    secret = "gemini-server-secret"
+    result = asyncio.run(resume_analyzer.GeminiResumeAnalyzer(secret, "gemini-test", 2).analyze("minimized resume", "role", "description", ["Python"]))
+    assert result.analysis_mode == "AI"
+    assert captured["client"]["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai/"
+    assert captured["path"] == "chat/completions"
+    assert captured["request"]["headers"] == {"Authorization": f"Bearer {secret}"}
+    assert "api_key" not in captured["request"]["json"]
+    assert captured["request"]["json"]["messages"][0]["content"] == resume_analyzer.SYSTEM_PROMPT
+    assert "minimized resume" in captured["request"]["json"]["messages"][1]["content"]
+
+
+def test_gemini_malformed_refusal_http_network_and_timeout_are_safe(monkeypatch):
+    import asyncio
+    class FakeResponse:
+        def __init__(self, payload=None, error=None): self.payload, self.error = payload, error
+        def raise_for_status(self):
+            if self.error: raise self.error
+        def json(self): return self.payload
+
+    class FakeClient:
+        payload = None
+        error = None
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, *args, **kwargs):
+            if self.error: raise self.error
+            return self.payload
+
+    monkeypatch.setattr(resume_analyzer.httpx, "AsyncClient", FakeClient)
+    analyzer = resume_analyzer.GeminiResumeAnalyzer("secret", "model", 2)
+    FakeClient.payload = FakeResponse({"choices": [{"message": {"content": "not json"}}]})
+    with pytest.raises(resume_analyzer.MalformedAIResponse): asyncio.run(analyzer.analyze("r", "j", "d", []))
+    FakeClient.payload = FakeResponse({"choices": [{"message": {"refusal": "blocked", "content": None}}]})
+    with pytest.raises(resume_analyzer.MalformedAIResponse): asyncio.run(analyzer.analyze("r", "j", "d", []))
+    FakeClient.payload = FakeResponse({"choices": [{"message": {"content": '{"overall_match_percentage": 100}'}}]})
+    with pytest.raises(resume_analyzer.MalformedAIResponse): asyncio.run(analyzer.analyze("r", "j", "d", []))
+    FakeClient.payload = FakeResponse(error=resume_analyzer.httpx.HTTPStatusError("failed", request=resume_analyzer.httpx.Request("POST", "https://example.test"), response=resume_analyzer.httpx.Response(503)))
+    with pytest.raises(resume_analyzer.AIProviderError) as status_error: asyncio.run(analyzer.analyze("r", "j", "d", []))
+    assert "secret" not in str(status_error.value)
+    for error in (resume_analyzer.httpx.ConnectError("private network detail"), resume_analyzer.httpx.TimeoutException("private timeout detail")):
+        FakeClient.error = error
+        with pytest.raises(resume_analyzer.AIProviderError) as provider_error: asyncio.run(analyzer.analyze("r", "j", "d", []))
+        assert "private" not in str(provider_error.value)
+
+
+def test_gemini_key_never_appears_in_api_response_or_logs(client, monkeypatch, caplog):
+    headers, drive_id = setup_student_and_drive(client)
+    monkeypatch.setattr(analysis_route, "extract_resume_text", lambda _path: "Jamie Student jamie@example.edu Python API developer")
+    secret = "gemini-secret-never-log"
+    class FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": '{"overall_match_percentage":50,"matching_skills":["Python"],"missing_skills":["SQL"],"education_match":{"status":"NOT_FOUND","explanation":"No evidence"},"experience_match":{"status":"PARTIAL","explanation":"Project evidence"},"improvement_suggestions":["Add examples"]}'}}]}
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, *args, **kwargs):
+            assert kwargs["headers"]["Authorization"] == f"Bearer {secret}"
+            return FakeResponse()
+    monkeypatch.setattr(resume_analyzer.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(analysis_route, "get_resume_analyzer", lambda: resume_analyzer.GeminiResumeAnalyzer(secret, "gemini-test", 2))
+    response = client.post("/api/students/me/resume-analysis", headers=headers, json={"job_drive_id": drive_id})
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+
 def setup_student_and_drive(client, with_resume=True):
     reg = client.post("/api/auth/register", json={"email":"student@example.edu", "full_name":"Jamie Student", "password":"Strong-student-password-123"})
     token = client.post("/api/auth/login", json={"email":"student@example.edu", "password":"Strong-student-password-123"}).json()["access_token"]
@@ -123,10 +226,10 @@ def setup_student_and_drive(client, with_resume=True):
         (path / "resume.pdf").write_bytes(b"%PDF-test")
     return headers, drive["id"]
 
-
 def test_analysis_endpoint_returns_decision_support_only(client, monkeypatch):
     headers, drive_id = setup_student_and_drive(client)
     monkeypatch.setattr(analysis_route, "extract_resume_text", lambda _path: "Jamie Student jamie@example.edu Python API developer")
+    monkeypatch.setattr(analysis_route, "get_resume_analyzer", lambda: resume_analyzer.MockResumeAnalyzer())
     response = client.post("/api/students/me/resume-analysis", headers=headers, json={"job_drive_id": drive_id})
     assert response.status_code == 200, response.text
     data = response.json()

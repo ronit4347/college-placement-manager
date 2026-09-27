@@ -16,7 +16,7 @@ College Placement Manager is planned as a role-aware application for coordinatin
 - Development: Git, environment variables, Docker-ready project structure
 
 ## Current implementation status
-The student dashboard includes a decision-support resume analyzer for published jobs. It uses local mock analysis when `AI_API_KEY` is unset; configure the optional backend key to enable AI analysis. See [docs/ai.md](docs/ai.md) for the prompt, privacy boundaries, response shape, and failure behavior.
+The student dashboard includes a resume analyzer for published jobs. Mock mode works without an API key; Gemini mode uses a server-side `AI_API_KEY`. The key must never be committed to GitHub. AI analysis is decision support for students, not an automated hiring decision, and personal identifiers are minimized before external analysis. See [docs/ai.md](docs/ai.md) for configuration, privacy boundaries, and failure behavior.
 
 
 - Responsive React application shell and home page
@@ -27,7 +27,7 @@ The student dashboard includes a decision-support resume analyzer for published 
 - Password-hashed student registration, JWT login, current-user endpoint, and role authorization
 - Student, admin, recruiter, and interviewer role-protected frontend routes
 - Student profile CRUD, skills, profile completion, and validated PDF resume management
-- Student resume-to-job analysis with deterministic mock mode and an optional backend-only AI provider
+- Student resume-to-job analysis with deterministic mock mode and an optional backend-only Gemini provider
 - User-scoped in-app notifications for application, interview, selection, and offer events
 - Backend-driven search, filtering, and pagination for admin and student placement lists
 - Admin-only company management, employer search and filtering, company activation, and recruiter company assignment

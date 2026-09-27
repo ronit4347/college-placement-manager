@@ -30,7 +30,11 @@ Resume files remain in the existing private local resume store. The analyzer enf
 
 ## Modes and provider abstraction
 
-`ResumeAnalyzer` is the provider interface. When `AI_API_KEY` is empty, the deterministic local `MockResumeAnalyzer` runs and labels results `MOCK`. This mode is useful for local development and does not make network requests. When a key is configured, the OpenAI Chat Completions provider requests strict structured JSON using the schema in `backend/app/services/resume_analyzer.py`, with model configured by `AI_MODEL` (default `gpt-4o-mini`). The response is validated again by Pydantic before returning it.
+`ResumeAnalyzer` is the provider interface. `AI_PROVIDER=mock` is the safe default and runs deterministic local analysis without an API key or network request. If `AI_API_KEY` is missing or empty, the application also falls back to mock mode, including when Gemini is selected.
+
+Set `AI_PROVIDER=gemini` and configure `AI_API_KEY` on the backend to use Gemini through Google's OpenAI-compatible Chat Completions endpoint. The backend sends the strict structured output schema and validates the response again before returning it. `AI_MODEL` selects the model; its default is `gemini-3.8-flash`. The key is sent only in the backend Authorization header. Never put it in frontend configuration or commit it to GitHub. No key is included in API responses.
+
+AI analysis is decision support for the student only. It must never make hiring, selection, rejection, ranking, or screening decisions. Before external analysis, the backend minimizes personal identifiers by removing the student's name, email, and phone from resume text.
 
 ## Backend prompt
 
@@ -42,4 +46,4 @@ Resume text and job text are supplied separately as untrusted user content. The 
 
 ## Configuration
 
-See the root `.env.example` for `AI_API_KEY`, `AI_MODEL`, `AI_REQUEST_TIMEOUT_SECONDS`, and `AI_MAX_RESUME_CHARACTERS`. Leave the key blank for mock mode. Never place credentials in frontend variables or source control.
+See the root `.env.example` for `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_REQUEST_TIMEOUT_SECONDS`, and `AI_MAX_RESUME_CHARACTERS`. Mock mode works without a key. Configure Gemini credentials only in the server environment; never place them in frontend variables or commit them to GitHub.
