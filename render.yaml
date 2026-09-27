@@ -32,10 +32,12 @@ services:
         value: "30"
       - key: FRONTEND_URL
         value: https://college-placement-manager-ronith.onrender.com
+      - key: AI_PROVIDER
+        value: gemini
       - key: AI_API_KEY
         sync: false
       - key: AI_MODEL
-        value: gpt-4o-mini
+        value: gemini-3.8-flash
       - key: AI_REQUEST_TIMEOUT_SECONDS
         value: "25"
       - key: AI_MAX_RESUME_CHARACTERS
